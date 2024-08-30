@@ -1,0 +1,78 @@
+#!/bin/bash
+# Intended to be used with the adjacent `decrypt` utility. The goal is to
+# provide very basic encryption/decryption functionality using openssl, as it's
+# available by default in more environments than GPG (Linux, macOS, git-bash).
+# Hybrid encryption scheme is used to encrypt archives of arbitrary size.
+
+set -e
+
+cmd=$(basename $0)
+show_help() {
+	echo "Usage: ${cmd} [-h] source pubkey"
+	echo
+	echo "This utility encrypts a file or directory according to a hybrid "
+	echo "encryption scheme. The outputs are an encrypted symmetric key "
+	echo "and an encrypted data archive created adjacent to the input path."
+	echo
+	echo "Options:"
+	echo "  -h    Show this help message"
+	echo
+	echo "Positional arguments:"
+	echo "  source  file or directory to encrypt"
+	echo "  pubkey  RSA public key"
+	exit 0
+}
+
+# Parse options
+while getopts ":h" opt; do
+	case ${opt} in
+		h )
+			show_help
+			;;
+    		\? )
+      			echo "Invalid option: -$OPTARG" >&2
+			echo "${cmd} -h for help."
+      			exit 1
+      			;;
+ 	 esac
+done
+
+# Shift positional arguments to get arg1 and arg2
+shift $((OPTIND - 1))
+
+# Check if two positional arguments are provided
+if [ $# -ne 2 ]; then
+	echo "Error: Two positional arguments are required. ${cmd} -h for help."
+	exit 1
+fi
+
+# Assign positional arguments to variables
+src=$1
+pubkey=$2
+
+# Check if openssl is installed
+if ! command -v -- openssl 2>&1 > /dev/null; then
+	echo "openssl is not installed. Please install it and try again."
+	exit 1
+fi
+
+basedir=$(dirname ${src})
+basesrc=$(basename ${src})
+stamp=$(date +'%Y%m%dT%H%M%S')
+src_enc="${basedir}/${basesrc}.${stamp}.enc"
+
+# generate symmetric key
+datakey="${basedir}/datakey.${stamp}"
+openssl rand -hex 32 > "${datakey}"
+
+# encrypt the source with the symmetric key
+tar -C "${basedir}" -cf - "${basesrc}" | openssl enc -aes-256-cbc -salt -pbkdf2 -pass file:"${datakey}" -out "${src_enc}"
+
+# encrypt symmetric key with the public key
+datakey_enc="${datakey}.enc"
+# rsa_padding_mode:oaep: Enhances the security of RSA encryption by using a modern padding scheme that provides semantic security and prevents various cryptographic attacks.
+# rsa_oaep_md:sha256: Ensures that the padding process within OAEP uses a secure hash function (SHA-256), further protecting the encryption process against weaknesses in padding.
+openssl pkeyutl -encrypt -inkey "${pubkey}" -pubin -in "${datakey}" -out "${datakey_enc}" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
+
+# clean up
+rm -f $datakey

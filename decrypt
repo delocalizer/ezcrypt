@@ -1,0 +1,63 @@
+#!/bin/bash
+# Intended to be used with the adjacent `encrypt` utility. The goal is to
+# provide very basic encryption/decryption functionality using openssl, as it's
+# available by default in more environments than GPG (Linux, macOS, git-bash).
+# Hybrid encryption scheme is used to encrypt archives of arbitrary size.
+
+set -e
+
+cmd=$(basename $0)
+show_help() {
+	echo "Usage: ${cmd} [-h] archive_enc datakey_enc privkey"
+	echo
+	echo "This utility decrypts an archive encrypted according to a hybrid "
+	echo "encryption scheme."
+	echo
+	echo "Options:"
+	echo "  -h    Show this help message"
+	echo
+	echo "Positional arguments:"
+	echo "  archive_enc  archive encrypted with a symmetric key"
+	echo "  datakey_enc  the symmetric key encrypted with a public key"
+	echo "  privkey      the private key matching the public key used to "
+	echo "               encrypt the symmetric key"
+	exit 0
+}
+
+# Parse options
+while getopts ":h" opt; do
+	case ${opt} in
+		h )
+			show_help
+			;;
+    		\? )
+      			echo "Invalid option: -$OPTARG" >&2
+      			exit 1
+      			;;
+ 	 esac
+done
+
+# Shift positional arguments to get arg1 and arg2
+shift $((OPTIND - 1))
+
+# Check if three positional arguments are provided
+if [ $# -ne 3 ]; then
+	echo "Error: Three positional arguments are required. ${cmd} -h for help."
+	exit 1
+fi
+
+# Assign positional arguments to variables
+archive_enc=$1
+datakey_enc=$2
+privkey=$3
+
+# Check if openssl is installed
+if ! command -v -- openssl 2>&1 > /dev/null; then
+	echo "openssl is not installed. Please install it and try again."
+	exit 1
+fi
+set -e
+
+datakey=$(mktemp)
+openssl pkeyutl -decrypt -in ${datakey_enc} -inkey ${privkey} -out ${datakey} -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
+openssl enc -in ${archive_enc}  -out - -d -aes256 -pbkdf2 -kfile ${datakey} | tar xf - 
